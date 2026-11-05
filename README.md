@@ -43,6 +43,8 @@ streamlit run app.py
 
 不要把 API Key 提交到仓库或发送到聊天中。`.env` 已被 Git 忽略。
 
+项目默认开启保存即重跑。修改 Python 代码后无需手动重启；修改 `.env`、Streamlit 配置或依赖后仍需重启服务。
+
 ## 测试
 
 ```powershell

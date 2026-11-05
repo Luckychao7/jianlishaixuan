@@ -125,6 +125,12 @@ streamlit run app.py
 
 浏览器通常自动打开 `http://localhost:8501`。停止服务时在终端按 `Ctrl+C`。
 
+项目已开启保存即重跑：
+
+- 修改 `app.py` 或 `services/` 下的 Python 文件并保存后，Streamlit 会自动重新运行页面。
+- 修改 `.env`、`.streamlit/config.toml` 或 `requirements.txt` 后，仍需停止并重新启动服务。
+- 如果页面没有自动刷新，可刷新浏览器或使用 Streamlit 页面右上角菜单中的 Rerun。
+
 ## 5. 支持格式与限制
 
 - PDF：`pypdf` 逐页提取文字；低于 50 个有效字符的页视为低文本页。
