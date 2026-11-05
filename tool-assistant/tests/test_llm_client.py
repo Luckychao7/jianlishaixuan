@@ -9,8 +9,13 @@ from services.schemas import StructuredJD
 
 
 class FakeCompletions:
-    def __init__(self, contents: list[str | Exception]) -> None:
+    def __init__(
+        self,
+        contents: list[str | Exception],
+        finish_reason: str | None = None,
+    ) -> None:
         self.contents = contents
+        self.finish_reason = finish_reason
         self.calls = 0
 
     def create(self, **kwargs):
@@ -20,13 +25,19 @@ class FakeCompletions:
             raise value
         return SimpleNamespace(
             choices=[
-                SimpleNamespace(message=SimpleNamespace(content=value))
+                SimpleNamespace(
+                    message=SimpleNamespace(content=value),
+                    finish_reason=self.finish_reason,
+                )
             ]
         )
 
 
-def _client(contents: list[str | Exception]) -> tuple[DeepSeekClient, FakeCompletions]:
-    completions = FakeCompletions(contents)
+def _client(
+    contents: list[str | Exception],
+    finish_reason: str | None = None,
+) -> tuple[DeepSeekClient, FakeCompletions]:
+    completions = FakeCompletions(contents, finish_reason)
     client = DeepSeekClient.__new__(DeepSeekClient)
     client.model = "deepseek-flash"
     client._client = SimpleNamespace(
@@ -59,6 +70,20 @@ def test_invalid_json_is_retried_once() -> None:
 def test_two_invalid_outputs_fail() -> None:
     client, completions = _client(["not-json", "{}"])
     with pytest.raises(LLMServiceError):
+        client.request_json(
+            system_prompt="json",
+            user_prompt="test",
+            response_model=StructuredJD,
+        )
+    assert completions.calls == 2
+
+
+def test_length_limited_output_is_retried_then_fails() -> None:
+    client, completions = _client(
+        [VALID_JSON, VALID_JSON],
+        finish_reason="length",
+    )
+    with pytest.raises(LLMServiceError, match="长度上限"):
         client.request_json(
             system_prompt="json",
             user_prompt="test",

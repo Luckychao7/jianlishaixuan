@@ -25,8 +25,27 @@ class HardCheckType(str, Enum):
     EDUCATION = "education"
     YEARS = "years"
     CERTIFICATE = "certificate"
+    TEAM_SIZE = "team_size"
     SKILL = "skill"
     OTHER = "other"
+
+
+class ExperienceScope(str, Enum):
+    PERFORMANCE_MARKETING = "performance_marketing"
+    TOB_SALES = "tob_sales"
+    FULL_STACK_WEB = "full_stack_web"
+    AI_SYSTEM_ARCHITECTURE = "ai_system_architecture"
+    AI_DEVELOPMENT_TOOLS = "ai_development_tools"
+    TEAM_MANAGEMENT = "team_management"
+    BACKEND_DEVELOPMENT = "backend_development"
+    FRONTEND_DEVELOPMENT = "frontend_development"
+    DATA_ENGINEERING = "data_engineering"
+    OTHER_RELEVANT = "other_relevant"
+
+
+class MarketingPlatform(str, Enum):
+    DOUYIN = "douyin"
+    WECHAT_CHANNELS = "wechat_channels"
 
 
 class RequirementCategory(str, Enum):
@@ -70,6 +89,14 @@ class HardRequirement(StrictModel):
     id: Annotated[str, StringConstraints(pattern=r"^H[1-9]\d*$")]
     desc: NonEmptyText
     check_type: HardCheckType
+    fact_scope: ExperienceScope | None = None
+    required_platforms: list[MarketingPlatform] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def years_require_scope(self) -> "HardRequirement":
+        if self.check_type == HardCheckType.YEARS and self.fact_scope is None:
+            raise ValueError("年限类硬条件必须指定可独立核验的 fact_scope")
+        return self
 
 
 class JobRequirement(StrictModel):
@@ -148,9 +175,36 @@ class GraduationFact(StrictModel):
 
 
 class WorkYearsFact(StrictModel):
+    """旧版结果兼容字段；新评估不得用它代替分范围年限事实。"""
+
     value: float | None = Field(default=None, ge=0, le=80)
     basis: str = Field(default="", max_length=1000)
     evidence: str = Field(default="", max_length=1000)
+    reliable: bool = False
+
+
+class ExperienceFact(StrictModel):
+    scope: ExperienceScope
+    years: float | None = Field(default=None, ge=0, le=80)
+    basis: str = Field(default="", max_length=1000)
+    evidence: str = Field(default="", max_length=1000)
+    platforms: list[MarketingPlatform] = Field(default_factory=list)
+    reliable: bool = False
+
+
+class TeamSizeFact(StrictModel):
+    max_team_size: int | None = Field(default=None, ge=0, le=100000)
+    evidence: str = Field(default="", max_length=1000)
+    reliable: bool = False
+
+
+class HardRequirementFact(StrictModel):
+    requirement_id: Annotated[str, StringConstraints(pattern=r"^H[1-9]\d*$")]
+    numeric_value: float | None = Field(default=None, ge=-1_000_000_000)
+    text_value: str = Field(default="", max_length=1000)
+    unit: str = Field(default="", max_length=100)
+    evidence: str = Field(default="", max_length=1000)
+    basis: str = Field(default="", max_length=1000)
     reliable: bool = False
 
 
@@ -163,8 +217,21 @@ class CertificateFact(StrictModel):
 class CandidateFacts(StrictModel):
     highest_education: EducationFact = Field(default_factory=EducationFact)
     graduation_time: GraduationFact = Field(default_factory=GraduationFact)
+    experience_facts: list[ExperienceFact] = Field(default_factory=list)
+    team_size: TeamSizeFact = Field(default_factory=TeamSizeFact)
+    hard_facts: list[HardRequirementFact] = Field(default_factory=list)
     relevant_work_years: WorkYearsFact = Field(default_factory=WorkYearsFact)
     certificates: list[CertificateFact] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_experience_scopes(self) -> "CandidateFacts":
+        scopes = [item.scope for item in self.experience_facts]
+        if len(scopes) != len(set(scopes)):
+            raise ValueError("experience_facts 中同一 scope 只能出现一次")
+        hard_ids = [item.requirement_id for item in self.hard_facts]
+        if len(hard_ids) != len(set(hard_ids)):
+            raise ValueError("hard_facts 中同一 requirement_id 只能出现一次")
+        return self
 
 
 class MatchItem(StrictModel):

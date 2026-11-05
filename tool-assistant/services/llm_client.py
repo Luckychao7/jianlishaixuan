@@ -51,10 +51,14 @@ class DeepSeekClient:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0,
+                    max_tokens=16000,
                     response_format={"type": "json_object"},
                     extra_body={"thinking": {"type": "disabled"}},
                 )
-                content = completion.choices[0].message.content
+                choice = completion.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    raise ValueError("模型输出达到长度上限")
+                content = choice.message.content
                 if not content:
                     raise ValueError("模型返回了空内容")
                 payload = json.loads(content)

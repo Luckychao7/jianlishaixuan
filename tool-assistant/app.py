@@ -15,10 +15,10 @@ from config import BASE_DIR, load_settings
 from services.database import Database
 from services.evaluator import ResumeEvaluator, task_resume_sort_key
 from services.exporter import build_csv
-from services.jd_parser import parse_jd
+from services.jd_parser import JD_PARSER_VERSION, parse_jd
 from services.llm_client import DeepSeekClient, LLMServiceError
 from services.parser import ResumeParseError
-from services.schemas import EvaluationResult
+from services.schemas import EvaluationResult, ExperienceScope
 
 
 st.set_page_config(
@@ -26,6 +26,19 @@ st.set_page_config(
     page_icon="📄",
     layout="wide",
 )
+
+EXPERIENCE_SCOPE_LABELS = {
+    ExperienceScope.PERFORMANCE_MARKETING: "效果营销投放年限",
+    ExperienceScope.TOB_SALES: "ToB销售年限",
+    ExperienceScope.FULL_STACK_WEB: "全栈Web开发年限",
+    ExperienceScope.AI_SYSTEM_ARCHITECTURE: "AI系统架构年限",
+    ExperienceScope.AI_DEVELOPMENT_TOOLS: "AI开发工具使用年限",
+    ExperienceScope.TEAM_MANAGEMENT: "团队管理年限",
+    ExperienceScope.BACKEND_DEVELOPMENT: "后端开发年限",
+    ExperienceScope.FRONTEND_DEVELOPMENT: "前端开发年限",
+    ExperienceScope.DATA_ENGINEERING: "数据工程年限",
+    ExperienceScope.OTHER_RELEVANT: "其他相关工作年限",
+}
 
 
 def _init_state() -> None:
@@ -125,18 +138,25 @@ def _render_home(settings, database: Database, llm_client: DeepSeekClient | None
     evaluator = ResumeEvaluator(run_settings, llm_client)
     task_id = str(uuid.uuid4())
     task_created_at = _now()
-    with st.spinner("正在结构化岗位 JD，请稍候..."):
-        try:
-            structured_jd = parse_jd(llm_client, jd_text, preferences)
-        except Exception as exc:
-            st.error(f"JD 解析失败：{exc}")
-            st.caption("请检查 DeepSeek 密钥、网络和 JD 内容后重试。")
-            return
+    jd_hash = hashlib.sha256(
+        f"{JD_PARSER_VERSION}\n{jd_text}\n{preferences}".encode("utf-8")
+    ).hexdigest()
+    structured_jd = database.find_structured_jd(jd_hash)
+    if structured_jd is None:
+        with st.spinner("正在结构化岗位 JD，请稍候..."):
+            try:
+                structured_jd = parse_jd(llm_client, jd_text, preferences)
+            except Exception as exc:
+                st.error(f"JD 解析失败：{exc}")
+                st.caption("请检查 DeepSeek 密钥、网络和 JD 内容后重试。")
+                return
+    else:
+        st.info("已复用相同 JD 的结构化结果，保证重复评估使用同一套要求。")
 
     database.create_task(
         task_id=task_id,
         jd_text=jd_text,
-        jd_hash=hashlib.sha256(jd_text.encode("utf-8")).hexdigest(),
+        jd_hash=jd_hash,
         structured_jd=structured_jd,
         created_at=task_created_at,
     )
@@ -284,60 +304,89 @@ def _render_details(row: dict[str, Any]) -> None:
 
         st.markdown("#### 候选人事实")
         facts = result.candidate_facts
+        fact_rows = [
+            {
+                "事实": "最高学历",
+                "提取值": facts.highest_education.level.value,
+                "可靠确认": "是"
+                if facts.highest_education.reliable
+                else "否",
+                "原文证据": facts.highest_education.evidence,
+            },
+            {
+                "事实": "毕业时间",
+                "提取值": facts.graduation_time.value or "未知",
+                "可靠确认": "是"
+                if facts.graduation_time.reliable
+                else "否",
+                "原文证据": facts.graduation_time.evidence,
+            },
+        ]
+        for experience in facts.experience_facts:
+            fact_rows.append(
+                {
+                    "事实": EXPERIENCE_SCOPE_LABELS[experience.scope],
+                    "提取值": (
+                        f"{experience.years:g} 年"
+                        if experience.years is not None
+                        else "无法可靠计算"
+                    ),
+                    "可靠确认": "是" if experience.reliable else "否",
+                    "原文证据": (
+                        experience.evidence
+                        + "；计算依据："
+                        + experience.basis
+                    ).strip("；"),
+                }
+            )
+        if not facts.experience_facts and facts.relevant_work_years.value is not None:
+            fact_rows.append(
+                {
+                    "事实": "旧版总工作年限",
+                    "提取值": f"{facts.relevant_work_years.value:g} 年",
+                    "可靠确认": "是"
+                    if facts.relevant_work_years.reliable
+                    else "否",
+                    "原文证据": (
+                        facts.relevant_work_years.evidence
+                        + "；计算依据："
+                        + facts.relevant_work_years.basis
+                    ).strip("；"),
+                }
+            )
+        fact_rows.append(
+            {
+                "事实": "最大管理团队规模",
+                "提取值": (
+                    f"{facts.team_size.max_team_size} 人"
+                    if facts.team_size.max_team_size is not None
+                    else "未知"
+                ),
+                "可靠确认": "是" if facts.team_size.reliable else "否",
+                "原文证据": facts.team_size.evidence,
+            }
+        )
+        fact_rows.append(
+            {
+                "事实": "证书",
+                "提取值": "、".join(
+                    item.name for item in facts.certificates
+                )
+                or "未识别",
+                "可靠确认": "；".join(
+                    f"{item.name}:{'是' if item.reliable else '否'}"
+                    for item in facts.certificates
+                )
+                or "无",
+                "原文证据": "；".join(
+                    item.evidence
+                    for item in facts.certificates
+                    if item.evidence
+                ),
+            }
+        )
         st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "事实": "最高学历",
-                        "提取值": facts.highest_education.level.value,
-                        "可靠确认": "是"
-                        if facts.highest_education.reliable
-                        else "否",
-                        "原文证据": facts.highest_education.evidence,
-                    },
-                    {
-                        "事实": "毕业时间",
-                        "提取值": facts.graduation_time.value or "未知",
-                        "可靠确认": "是"
-                        if facts.graduation_time.reliable
-                        else "否",
-                        "原文证据": facts.graduation_time.evidence,
-                    },
-                    {
-                        "事实": "岗位相关年限",
-                        "提取值": (
-                            f"{facts.relevant_work_years.value:g} 年"
-                            if facts.relevant_work_years.value is not None
-                            else "未知"
-                        ),
-                        "可靠确认": "是"
-                        if facts.relevant_work_years.reliable
-                        else "否",
-                        "原文证据": (
-                            facts.relevant_work_years.evidence
-                            + "；计算依据："
-                            + facts.relevant_work_years.basis
-                        ).strip("；"),
-                    },
-                    {
-                        "事实": "证书",
-                        "提取值": "、".join(
-                            item.name for item in facts.certificates
-                        )
-                        or "未识别",
-                        "可靠确认": "；".join(
-                            f"{item.name}:{'是' if item.reliable else '否'}"
-                            for item in facts.certificates
-                        )
-                        or "无",
-                        "原文证据": "；".join(
-                            item.evidence
-                            for item in facts.certificates
-                            if item.evidence
-                        ),
-                    },
-                ]
-            ),
+            pd.DataFrame(fact_rows),
             hide_index=True,
             width="stretch",
         )

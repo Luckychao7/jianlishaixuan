@@ -80,3 +80,18 @@ def test_database_round_trips_successful_result(settings) -> None:
     assert loaded.total_score == 90
     assert loaded.recommendation == "强烈推荐"
 
+
+def test_database_reuses_structured_jd_by_hash(settings) -> None:
+    database = Database(settings.database_path)
+    database.create_task(
+        task_id="task-cache",
+        jd_text="相同 JD",
+        jd_hash="same-hash",
+        structured_jd=_structured_jd(),
+        created_at="2026-01-01T10:00:00+08:00",
+    )
+    cached = database.find_structured_jd("same-hash")
+    assert cached is not None
+    assert cached.core_duties[0].desc == "产品分析"
+    assert database.find_structured_jd("other-hash") is None
+

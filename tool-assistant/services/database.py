@@ -142,6 +142,24 @@ class Database:
             raise KeyError("任务不存在")
         return StructuredJD.model_validate_json(task["jd_requirements_json"])
 
+    def find_structured_jd(self, jd_hash: str) -> StructuredJD | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT jd_requirements_json FROM tasks
+                WHERE jd_hash = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (jd_hash,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return StructuredJD.model_validate_json(row["jd_requirements_json"])
+        except Exception:
+            return None
+
     def list_resumes(self, task_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute(
